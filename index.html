@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+ <!DOCTYPE html>
 <html lang="uz">
 <head>
 <meta charset="UTF-8">
@@ -98,6 +98,18 @@
     padding: 12px 22px;
   }
   #start p { color: #d8b4fe; max-width: 420px; line-height: 1.7; font-size: 14px; }
+  #cursor {
+    position: fixed;
+    left: 0; top: 0;
+    width: 60px; height: 60px;
+    margin: -30px 0 0 -30px;
+    border-radius: 50%;
+    border: 3px solid #fff;
+    box-shadow: 0 0 25px #bd55ff, inset 0 0 15px #bd55ff;
+    z-index: 4;
+    pointer-events: none;
+    display: none;
+  }
 </style>
 </head>
 <body>
@@ -106,6 +118,7 @@
 <video id="camera" autoplay playsinline muted></video>
 <div id="info"></div>
 <div id="scene"></div>
+<div id="cursor"></div>
 
 <div id="start">
   <p>Qo'lingni kameraga ko'rsat — zarrachalar harakatlanadi.<br>
@@ -125,6 +138,7 @@ const statusEl = document.getElementById("status");
 const infoEl = document.getElementById("info");
 const video = document.getElementById("camera");
 const startEl = document.getElementById("start");
+const cursorEl = document.getElementById("cursor");
 
 const isMobile = matchMedia("(pointer: coarse)").matches || Math.min(innerWidth, innerHeight) < 600;
 const COUNT = isMobile ? 2000 : 4500;
@@ -225,6 +239,8 @@ async function createLandmarker(vision, FilesetResolver) {
     runningMode: "VIDEO",
     numHands: 1
   });
+  // على الهاتف نستخدم CPU لأن GPU يفشل بصمت في بعض الأجهزة
+  if (isMobile) return await make("CPU");
   try { return await make("GPU"); }
   catch (e) { console.warn("GPU delegate failed, using CPU", e); return await make("CPU"); }
 }
@@ -268,11 +284,18 @@ document.getElementById("btnTouch").addEventListener("click", setTouchMode);
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
 function detect() {
-  if (mode !== "camera" || !handLandmarker || video.readyState < 2) return;
+  if (mode !== "camera" || !handLandmarker || video.readyState < 2 || !video.videoWidth) return;
   if (video.currentTime === lastVideoTime) return;
   lastVideoTime = video.currentTime;
 
-  const res = handLandmarker.detectForVideo(video, performance.now());
+  let res;
+  try {
+    res = handLandmarker.detectForVideo(video, performance.now());
+  } catch (e) {
+    console.error(e);
+    statusEl.textContent = "Aniqlash xatosi: " + e.message;
+    return;
+  }
   if (res.landmarks && res.landmarks.length) {
     const lm = res.landmarks[0];
     const { w, h } = viewSize();
@@ -283,13 +306,20 @@ function detect() {
     const tips = [8, 12, 16, 20];
     const avg = tips.reduce((s, t) => s + dist(lm[t], lm[0]), 0) / tips.length / scale;
     hand.open = avg > 1.6 ? 1 : 0;          // >1.6 يد مفتوحة، غير ذلك قبضة
+
+    cursorEl.style.display = "block";
+    cursorEl.style.transform = `translate(${(0.5 + hand.x / w) * innerWidth}px, ${(0.5 - hand.y / h) * innerHeight}px)`;
+    cursorEl.style.borderColor = hand.open ? "#fff" : "#ff4d6d";
+    statusEl.textContent = hand.open ? "Qo'l topildi ✋ (ochiq)" : "Qo'l topildi ✊ (musht)";
   } else {
     hand.active = false;
+    cursorEl.style.display = "none";
+    statusEl.textContent = "Qo'l ko'rinmayapti — kameraga ko'rsat ✋";
   }
 }
 
 // ---------- ANIMATION ----------
-const RADIUS = 3.5;
+const RADIUS = 4.5;
 function animate() {
   requestAnimationFrame(animate);
   detect();
@@ -303,7 +333,7 @@ function animate() {
       const dy = hand.y - positions[i3 + 1];
       const d = Math.hypot(dx, dy) + 0.001;
       if (d < RADIUS) {
-        const f = (1 - d / RADIUS) * 0.12;
+        const f = (1 - d / RADIUS) * 0.3;
         const dir = hand.open ? -1 : 1;     // مفتوحة = تنافر، قبضة = تجاذب
         vx += (dx / d) * f * dir;
         vy += (dy / d) * f * dir;
